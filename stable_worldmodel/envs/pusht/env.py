@@ -337,7 +337,11 @@ class PushT(gym.Env):
 
     def step(self, action):
         self.n_contact_points = 0
-        n_steps = int(1 / (self.dt * self.control_hz))
+        # round(), not int(): a speed-up wrapper picks (dt, control_hz) so that
+        # dt * control_hz is 1/n for an integer n, and float error would make
+        # truncation drop a whole substep (e.g. 6.9999 -> 6). Identical to the
+        # old int() at the default 10 Hz / 0.01 s pair.
+        n_steps = max(1, int(round(1 / (self.dt * self.control_hz))))
 
         self.latest_action = action
 
