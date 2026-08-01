@@ -51,8 +51,14 @@ class PushT(gym.Env):
         render_mode='rgb_array',
         relative=True,
         init_value=None,
+        escapable_block=False,
     ):
         self._seed = None
+        # escapable_block=True removes the containment walls in _setup() so the
+        # DYNAMIC block (T) can be pushed out of the arena; the KINEMATIC agent is
+        # PD-driven and unaffected by walls, so it stays in frame regardless.
+        # Default False keeps the classic bounded PushT (bitwise-identical behavior).
+        self.escapable_block = escapable_block
         self.window_size = ws = 512  # The size of the PyGame window
         self.render_size = resolution
         self.relative = relative
@@ -76,9 +82,15 @@ class PushT(gym.Env):
                     high=np.array([ws, ws, ws, ws]),
                     dtype=np.float64,
                 ),
+                # Block x,y bounds widen SYMMETRICALLY about the play-region center
+                # (~256) when escapable so an out-of-arena T is not flagged/normalized
+                # asymmetrically: [-ws, 2*ws] is symmetric about 256. Box is declarative
+                # (gymnasium does not clip observations); agent x,y stay bounded.
                 'state': spaces.Box(
-                    low=np.array([0, 0, 0, 0, 0, -ws, -ws]),
-                    high=np.array([ws, ws, ws, ws, np.pi * 2, ws, ws]),
+                    low=np.array([0, 0, (-ws if escapable_block else 0),
+                                  (-ws if escapable_block else 0), 0, -ws, -ws]),
+                    high=np.array([ws, ws, (2 * ws if escapable_block else ws),
+                                   (2 * ws if escapable_block else ws), np.pi * 2, ws, ws]),
                     dtype=np.float64,
                 ),
             }
@@ -326,7 +338,11 @@ class PushT(gym.Env):
 
     def step(self, action):
         self.n_contact_points = 0
-        n_steps = int(1 / (self.dt * self.control_hz))
+        # round(), not int(): a speed-up wrapper picks (dt, control_hz) so that
+        # dt * control_hz is 1/n for an integer n, and float error would make
+        # truncation drop a whole substep (e.g. 6.9999 -> 6). Identical to the
+        # old int() at the default 10 Hz / 0.01 s pair.
+        n_steps = max(1, int(round(1 / (self.dt * self.control_hz))))
 
         self.latest_action = action
 
@@ -579,15 +595,17 @@ class PushT(gym.Env):
         self.space.damping = 0
         self.render_buffer = []
 
-        # Add walls.
-        walls = [
-            self._add_segment((5, 506), (5, 5), 2),
-            self._add_segment((5, 5), (506, 5), 2),
-            self._add_segment((506, 5), (506, 506), 2),
-            self._add_segment((5, 506), (506, 506), 2),
-        ]
+        # Add walls (containment box (5,5)-(506,506)). Skipped when escapable_block
+        # so the DYNAMIC block can be pushed out of the arena.
+        if not self.escapable_block:
+            walls = [
+                self._add_segment((5, 506), (5, 5), 2),
+                self._add_segment((5, 5), (506, 5), 2),
+                self._add_segment((506, 5), (506, 506), 2),
+                self._add_segment((5, 506), (506, 506), 2),
+            ]
 
-        self.space.add(*walls)
+            self.space.add(*walls)
 
         #### agent ####
 
